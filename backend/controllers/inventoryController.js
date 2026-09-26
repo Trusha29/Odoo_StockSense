@@ -3,9 +3,11 @@ const {
   Category,
   Warehouse,
   Product,
+  ReorderRule,
   InventoryDocument,
   StockMovement
 } = require("../models/Inventory");
+const { calculateSuggestedOrder, matchesInventoryFilters, normalizeOperationLines } = require("../utils/inventoryLogic");
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
@@ -43,24 +45,44 @@ const productResponse = (product) => {
   };
 };
 
-const documentResponse = (document) => ({
-  id: document.reference,
-  _id: String(document._id),
-  type: document.type,
-  partner: document.partner || document.reason || "",
-  warehouse: document.warehouse || document.sourceLocation || "",
-  sourceLocation: document.sourceLocation,
-  destinationLocation: document.destinationLocation,
-  product: document.productName,
-  productId: String(document.product),
-  sku: document.sku,
-  category: document.category,
-  quantity: document.quantity,
-  countedQuantity: document.countedQuantity,
-  reason: document.reason,
-  status: document.status,
-  date: new Date(document.date).toISOString().slice(0, 10)
-});
+const documentLines = (document) => document.lines?.length
+  ? document.lines.map((line) => ({
+    productId: String(line.product),
+    product: line.productName,
+    sku: line.sku,
+    category: line.category,
+    quantity: line.quantity
+  }))
+  : [{
+    productId: String(document.product),
+    product: document.productName,
+    sku: document.sku,
+    category: document.category,
+    quantity: document.type === "Adjustment" ? document.countedQuantity : document.quantity
+  }];
+
+const documentResponse = (document) => {
+  const lines = documentLines(document);
+  return {
+    id: document.reference,
+    _id: String(document._id),
+    type: document.type,
+    partner: document.partner || document.reason || "",
+    warehouse: document.warehouse || document.sourceLocation || "",
+    sourceLocation: document.sourceLocation,
+    destinationLocation: document.destinationLocation,
+    product: lines.length === 1 ? lines[0].product : `${lines.length} products`,
+    productId: lines[0].productId,
+    sku: lines.length === 1 ? lines[0].sku : `${lines.length} items`,
+    category: lines.length === 1 ? lines[0].category : "Multiple",
+    lines,
+    quantity: lines.reduce((sum, line) => sum + line.quantity, 0),
+    countedQuantity: document.countedQuantity,
+    reason: document.reason,
+    status: document.status,
+    date: new Date(document.date).toISOString().slice(0, 10)
+  };
+};
 
 const getFilters = endpoint(async () => {
   const [categories, warehouses] = await Promise.all([
@@ -71,8 +93,58 @@ const getFilters = endpoint(async () => {
 });
 
 const getCategories = endpoint(async () => ({
-  categories: (await Category.find().sort({ name: 1 }).select("name -_id").lean()).map((row) => row.name)
+  categories: await Category.find().sort({ name: 1 }).lean()
 }));
+
+const createCategory = endpoint(async (req) => {
+  requireManager(req.user);
+  const name = String(req.body.name || "").trim();
+  if (!name) throw fail(400, "Category name is required.");
+  const category = await Category.create({ name });
+  return { category };
+}, 201);
+
+const updateCategory = endpoint(async (req) => {
+  requireManager(req.user);
+  const name = String(req.body.name || "").trim();
+  if (!name) throw fail(400, "Category name is required.");
+  const session = await mongoose.startSession();
+  let updatedCategory;
+  try {
+    await session.withTransaction(async () => {
+      const category = await Category.findById(req.params.id).session(session);
+      if (!category) throw fail(404, "Category not found.");
+      const previousName = category.name;
+      category.name = name;
+      await category.save({ session });
+      await Promise.all([
+        Product.updateMany({ category: previousName }, { category: name }, { session }),
+        InventoryDocument.updateMany({ category: previousName }, { category: name }, { session }),
+        InventoryDocument.updateMany(
+          { "lines.category": previousName },
+          { $set: { "lines.$[line].category": name } },
+          { arrayFilters: [{ "line.category": previousName }], session }
+        )
+      ]);
+      updatedCategory = category.toObject();
+    });
+  } finally {
+    await session.endSession();
+  }
+  return { category: updatedCategory };
+});
+
+const deleteCategory = endpoint(async (req) => {
+  requireManager(req.user);
+  const category = await Category.findById(req.params.id);
+  if (!category) throw fail(404, "Category not found.");
+  if (await Product.exists({ category: category.name })) throw fail(409, "Move or remove products in this category before deleting it.");
+  if (await InventoryDocument.exists({ $or: [{ category: category.name }, { "lines.category": category.name }] })) {
+    throw fail(409, "This category is used by operation history and cannot be deleted.");
+  }
+  await category.deleteOne();
+  return { message: "Category deleted." };
+});
 
 const getProducts = endpoint(async (req) => {
   const products = await Product.find().sort({ name: 1 }).lean();
@@ -119,28 +191,124 @@ const updateProduct = endpoint(async (req) => {
   return { product: productResponse(product) };
 });
 
+const getReorderRules = endpoint(async () => {
+  const rules = await ReorderRule.find().populate("product", "sku name uom category stockByLocation").sort({ location: 1 }).lean();
+  return {
+    rules: rules.map((rule) => ({
+      id: String(rule._id),
+      productId: String(rule.product._id),
+      sku: rule.product.sku,
+      product: rule.product.name,
+      category: rule.product.category,
+      uom: rule.product.uom,
+      location: rule.location,
+      onHand: rule.product.stockByLocation.find((row) => row.location === rule.location)?.quantity || 0,
+      reorderAt: rule.reorderAt,
+      targetStock: rule.targetStock,
+      suggestedOrder: calculateSuggestedOrder(
+        rule.product.stockByLocation.find((row) => row.location === rule.location)?.quantity || 0,
+        rule.reorderAt,
+        rule.targetStock
+      )
+    }))
+  };
+});
+
+const saveReorderRule = endpoint(async (req) => {
+  requireManager(req.user);
+  const { productId, location, reorderAt, targetStock } = req.body;
+  if (!mongoose.isValidObjectId(productId) || !location) throw fail(400, "Choose a product and location.");
+  const numericReorderAt = Number(reorderAt);
+  const numericTargetStock = Number(targetStock);
+  if (!Number.isFinite(numericReorderAt) || !Number.isFinite(numericTargetStock) || numericReorderAt < 0 || numericTargetStock < numericReorderAt) {
+    throw fail(400, "Target stock must be greater than or equal to the reorder threshold.");
+  }
+  if (!(await Product.exists({ _id: productId }))) throw fail(404, "Product not found.");
+  if (!(await Warehouse.exists({ name: location }))) throw fail(400, "Choose a valid warehouse or location.");
+  const rule = await ReorderRule.findOneAndUpdate(
+    { product: productId, location },
+    { product: productId, location, reorderAt: numericReorderAt, targetStock: numericTargetStock },
+    { upsert: true, returnDocument: "after", runValidators: true }
+  );
+  return { rule: { id: String(rule._id), productId: String(rule.product), location, reorderAt: rule.reorderAt, targetStock: rule.targetStock } };
+}, 201);
+
+const deleteReorderRule = endpoint(async (req) => {
+  requireManager(req.user);
+  const rule = await ReorderRule.findByIdAndDelete(req.params.id);
+  if (!rule) throw fail(404, "Reorder rule not found.");
+  return { message: "Reorder rule deleted." };
+});
+
 const getWarehouses = endpoint(async () => ({ warehouses: await Warehouse.find().sort({ name: 1 }).lean() }));
 
 const createWarehouse = endpoint(async (req) => {
   requireManager(req.user);
-  const { name, code } = req.body;
+  const { name, code, kind = "warehouse", parentWarehouse = "" } = req.body;
   if (!name || !code) throw fail(400, "Warehouse name and code are required.");
-  const warehouse = await Warehouse.create({ name, code });
+  if (!["warehouse", "location"].includes(kind)) throw fail(400, "Choose a valid entry type.");
+  if (kind === "location" && (!parentWarehouse || !(await Warehouse.exists({ name: parentWarehouse, kind: "warehouse" })))) {
+    throw fail(400, "Choose a valid parent warehouse for this location.");
+  }
+  const warehouse = await Warehouse.create({ name, code, kind, parentWarehouse: kind === "location" ? parentWarehouse : "" });
   return { warehouse };
 }, 201);
 
+const updateWarehouse = endpoint(async (req) => {
+  requireManager(req.user);
+  const { name, code, kind, parentWarehouse = "" } = req.body;
+  if (!name || !code || !["warehouse", "location"].includes(kind)) throw fail(400, "Name, code, and a valid entry type are required.");
+  if (kind === "location" && (!parentWarehouse || !(await Warehouse.exists({ name: parentWarehouse, kind: "warehouse", _id: { $ne: req.params.id } })))) {
+    throw fail(400, "Choose a valid parent warehouse for this location.");
+  }
+  const entry = await Warehouse.findById(req.params.id);
+  if (!entry) throw fail(404, "Warehouse or location not found.");
+  if (entry.kind === "warehouse" && kind === "location" && await Warehouse.exists({ parentWarehouse: entry.name })) {
+    throw fail(409, "A warehouse with child locations cannot be changed into a location.");
+  }
+  if (kind === "location" && parentWarehouse === name.trim()) throw fail(400, "A location cannot be its own parent warehouse.");
+  const previousName = entry.name;
+  entry.name = name;
+  entry.code = code;
+  entry.kind = kind;
+  entry.parentWarehouse = kind === "location" ? parentWarehouse : "";
+  await entry.save();
+  if (previousName !== entry.name) {
+    await Promise.all([
+      Product.updateMany({ "stockByLocation.location": previousName }, { $set: { "stockByLocation.$[row].location": entry.name } }, { arrayFilters: [{ "row.location": previousName }] }),
+      ReorderRule.updateMany({ location: previousName }, { location: entry.name }),
+      InventoryDocument.updateMany({ warehouse: previousName }, { warehouse: entry.name }),
+      InventoryDocument.updateMany({ sourceLocation: previousName }, { sourceLocation: entry.name }),
+      InventoryDocument.updateMany({ destinationLocation: previousName }, { destinationLocation: entry.name }),
+      StockMovement.updateMany({ from: previousName }, { from: entry.name }),
+      StockMovement.updateMany({ to: previousName }, { to: entry.name }),
+      Warehouse.updateMany({ parentWarehouse: previousName }, { parentWarehouse: entry.name })
+    ]);
+  }
+  return { warehouse: entry };
+});
+
+const deleteWarehouse = endpoint(async (req) => {
+  requireManager(req.user);
+  const entry = await Warehouse.findById(req.params.id);
+  if (!entry) throw fail(404, "Warehouse or location not found.");
+  if (entry.kind === "warehouse" && await Warehouse.exists({ parentWarehouse: entry.name })) {
+    throw fail(409, "Move or remove child locations before deleting this warehouse.");
+  }
+  const [usedByProducts, usedByDocuments, usedByMoves] = await Promise.all([
+    Product.exists({ "stockByLocation.location": entry.name }),
+    InventoryDocument.exists({ $or: [{ warehouse: entry.name }, { sourceLocation: entry.name }, { destinationLocation: entry.name }] }),
+    StockMovement.exists({ $or: [{ from: entry.name }, { to: entry.name }] })
+  ]);
+  if (usedByProducts || usedByDocuments || usedByMoves) throw fail(409, "This location is referenced by stock or operation history and cannot be deleted.");
+  await entry.deleteOne();
+  return { message: "Warehouse or location deleted." };
+});
+
 const getDocuments = endpoint(async (req) => {
   const documents = await InventoryDocument.find().sort({ date: -1, createdAt: -1 }).lean();
-  const { type, status, warehouse, category, search = "" } = req.query;
-  const needle = String(search).trim().toLowerCase();
   return {
-    documents: documents.map(documentResponse).filter((document) => {
-      if (type && type !== "all" && document.type !== type) return false;
-      if (status && status !== "all" && document.status !== status) return false;
-      if (warehouse && warehouse !== "all" && ![document.warehouse, document.sourceLocation, document.destinationLocation].includes(warehouse)) return false;
-      if (category && category !== "all" && document.category !== category) return false;
-      return !needle || `${document.id} ${document.partner} ${document.warehouse} ${document.product} ${document.sku}`.toLowerCase().includes(needle);
-    })
+    documents: documents.map(documentResponse).filter((document) => matchesInventoryFilters(document, req.query))
   };
 });
 
@@ -152,21 +320,25 @@ const nextReference = async (type) => {
 };
 
 const createDocument = endpoint(async (req) => {
-  const { type, productId, quantity, warehouse, sourceLocation, destinationLocation, partner, reason, countedQuantity } = req.body;
+  const { type, productId, quantity, lines: requestLines, warehouse, sourceLocation, destinationLocation, partner, reason, countedQuantity } = req.body;
   if (!["Receipt", "Delivery", "Internal", "Adjustment"].includes(type)) throw fail(400, "Choose a valid operation type.");
   if (["Receipt", "Delivery"].includes(type)) requireManager(req.user);
-  if (!productId || !mongoose.isValidObjectId(productId)) throw fail(400, "Choose a valid product.");
-  const product = await Product.findById(productId);
-  if (!product) throw fail(404, "Product not found.");
+  const inputLines = Array.isArray(requestLines) && requestLines.length
+    ? requestLines
+    : [{ productId, quantity: type === "Adjustment" ? countedQuantity : quantity }];
+  const normalizedLines = [];
+  const validatedLines = normalizeOperationLines(inputLines, type);
+  for (const line of validatedLines) {
+    if (!mongoose.isValidObjectId(line.productId)) throw fail(400, "Choose a valid product for every operation line.");
+    const product = await Product.findById(line.productId);
+    if (!product) throw fail(404, "A product in this operation was not found.");
+    normalizedLines.push({ product: product._id, productName: product.name, sku: product.sku, category: product.category, quantity: line.quantity });
+  }
+  const firstLine = normalizedLines[0];
   if (type === "Internal" && (!sourceLocation || !destinationLocation || sourceLocation === destinationLocation)) {
     throw fail(400, "Choose different source and destination locations.");
   }
   if (["Receipt", "Delivery", "Adjustment"].includes(type) && !warehouse) throw fail(400, "Choose a warehouse or location.");
-  const numericQuantity = Number(quantity);
-  const numericCount = Number(countedQuantity);
-  if (type === "Adjustment" ? !Number.isFinite(numericCount) || numericCount < 0 : !Number.isFinite(numericQuantity) || numericQuantity <= 0) {
-    throw fail(400, type === "Adjustment" ? "Enter a valid counted quantity." : "Enter a quantity greater than zero.");
-  }
   const document = await InventoryDocument.create({
     reference: await nextReference(type),
     type,
@@ -174,12 +346,13 @@ const createDocument = endpoint(async (req) => {
     warehouse: warehouse || sourceLocation || "",
     sourceLocation: sourceLocation || "",
     destinationLocation: destinationLocation || "",
-    product: product._id,
-    productName: product.name,
-    sku: product.sku,
-    category: product.category,
-    quantity: type === "Adjustment" ? 0 : numericQuantity,
-    countedQuantity: type === "Adjustment" ? numericCount : undefined,
+    product: firstLine.product,
+    productName: firstLine.productName,
+    sku: firstLine.sku,
+    category: firstLine.category,
+    quantity: type === "Adjustment" ? 0 : normalizedLines.reduce((sum, line) => sum + line.quantity, 0),
+    countedQuantity: type === "Adjustment" ? firstLine.quantity : undefined,
+    lines: normalizedLines,
     reason: reason || "",
     status: "Draft"
   });
@@ -198,43 +371,45 @@ const setLocationQuantity = (product, location, quantity) => {
 };
 
 const applyDocument = async (document, session) => {
-  const product = await Product.findById(document.product).session(session);
-  if (!product) throw fail(404, "The product for this operation no longer exists.");
   const movements = [];
-  if (document.type === "Receipt") {
-    const location = document.warehouse;
-    setLocationQuantity(product, location, getLocationQuantity(product, location) + document.quantity);
-    movements.push({ quantity: document.quantity, from: "Supplier", to: location });
-  } else if (document.type === "Delivery") {
-    const location = document.warehouse;
-    const current = getLocationQuantity(product, location);
-    if (current < document.quantity) throw fail(400, `Insufficient stock at ${location}. Available: ${current}.`);
-    setLocationQuantity(product, location, current - document.quantity);
-    movements.push({ quantity: -document.quantity, from: location, to: document.partner || "Customer" });
-  } else if (document.type === "Internal") {
-    const current = getLocationQuantity(product, document.sourceLocation);
-    if (current < document.quantity) throw fail(400, `Insufficient stock at ${document.sourceLocation}. Available: ${current}.`);
-    setLocationQuantity(product, document.sourceLocation, current - document.quantity);
-    setLocationQuantity(product, document.destinationLocation, getLocationQuantity(product, document.destinationLocation) + document.quantity);
-    movements.push({ quantity: -document.quantity, from: document.sourceLocation, to: document.destinationLocation });
-    movements.push({ quantity: document.quantity, from: document.sourceLocation, to: document.destinationLocation });
-  } else {
-    const location = document.warehouse;
-    const current = getLocationQuantity(product, location);
-    const difference = document.countedQuantity - current;
-    setLocationQuantity(product, location, document.countedQuantity);
-    if (difference !== 0) movements.push({ quantity: difference, from: location, to: location });
+  for (const line of documentLines(document)) {
+    const product = await Product.findById(line.productId).session(session);
+    if (!product) throw fail(404, "A product in this operation no longer exists.");
+    if (document.type === "Receipt") {
+      const location = document.warehouse;
+      setLocationQuantity(product, location, getLocationQuantity(product, location) + line.quantity);
+      movements.push({ product, quantity: line.quantity, from: "Supplier", to: location });
+    } else if (document.type === "Delivery") {
+      const location = document.warehouse;
+      const current = getLocationQuantity(product, location);
+      if (current < line.quantity) throw fail(400, `Insufficient stock for ${product.name} at ${location}. Available: ${current}.`);
+      setLocationQuantity(product, location, current - line.quantity);
+      movements.push({ product, quantity: -line.quantity, from: location, to: document.partner || "Customer" });
+    } else if (document.type === "Internal") {
+      const current = getLocationQuantity(product, document.sourceLocation);
+      if (current < line.quantity) throw fail(400, `Insufficient stock for ${product.name} at ${document.sourceLocation}. Available: ${current}.`);
+      setLocationQuantity(product, document.sourceLocation, current - line.quantity);
+      setLocationQuantity(product, document.destinationLocation, getLocationQuantity(product, document.destinationLocation) + line.quantity);
+      movements.push({ product, quantity: -line.quantity, from: document.sourceLocation, to: document.destinationLocation });
+      movements.push({ product, quantity: line.quantity, from: document.sourceLocation, to: document.destinationLocation });
+    } else {
+      const location = document.warehouse;
+      const current = getLocationQuantity(product, location);
+      const difference = line.quantity - current;
+      setLocationQuantity(product, location, line.quantity);
+      if (difference !== 0) movements.push({ product, quantity: difference, from: location, to: location });
+    }
+    await product.save({ session });
   }
-  await product.save({ session });
   if (movements.length) {
     await StockMovement.insertMany(movements.map((movement) => ({
       reference: document.reference,
-      product: product._id,
-      productName: product.name,
-      sku: product.sku,
+      ...movement,
+      product: movement.product._id,
+      productName: movement.product.name,
+      sku: movement.product.sku,
       type: document.type,
-      date: new Date(),
-      ...movement
+      date: new Date()
     })), { session });
   }
 };
@@ -267,17 +442,30 @@ const updateDocumentStatus = endpoint(async (req) => {
 
 const getMoves = endpoint(async (req) => {
   const moves = await StockMovement.find().sort({ date: -1, createdAt: -1 }).lean();
-  const { warehouse, category, search = "" } = req.query;
+  const { type, status, warehouse, category, search = "" } = req.query;
   const needle = String(search).trim().toLowerCase();
   const productIds = [...new Set(moves.map((move) => String(move.product)))];
-  const products = await Product.find({ _id: { $in: productIds } }).select("category").lean();
+  const references = [...new Set(moves.map((move) => move.reference))];
+  const [products, documents] = await Promise.all([
+    Product.find({ _id: { $in: productIds } }).select("category").lean(),
+    InventoryDocument.find({ reference: { $in: references } }).select("reference type status").lean()
+  ]);
   const categoryByProductId = new Map(products.map((product) => [String(product._id), product.category]));
+  const documentByReference = new Map(documents.map((document) => [document.reference, document]));
   const results = [];
   for (const move of moves) {
     const productCategory = categoryByProductId.get(String(move.product)) || "";
-    if (category && category !== "all" && productCategory !== category) continue;
-    if (warehouse && warehouse !== "all" && ![move.from, move.to].includes(warehouse)) continue;
-    if (needle && !`${move.reference} ${move.productName} ${move.sku} ${move.from} ${move.to}`.toLowerCase().includes(needle)) continue;
+    const document = documentByReference.get(move.reference);
+    if (!matchesInventoryFilters({
+      reference: move.reference,
+      type: document?.type || move.type,
+      status: document?.status || "Done",
+      category: productCategory,
+      product: move.productName,
+      sku: move.sku,
+      from: move.from,
+      to: move.to
+    }, req.query)) continue;
     results.push({
       id: `MV-${String(move._id).slice(-6).toUpperCase()}`,
       product: move.productName,
@@ -287,37 +475,61 @@ const getMoves = endpoint(async (req) => {
       to: move.to,
       ref: move.reference,
       category: productCategory,
-      type: move.type,
+      type: document?.type || move.type,
+      status: document?.status || "Done",
       date: new Date(move.date).toISOString().slice(0, 16).replace("T", " ")
     });
   }
   return { moves: results };
 });
 
-const getDashboard = endpoint(async () => {
+const getDashboard = endpoint(async (req) => {
+  const { type, status, warehouse, category, search = "" } = req.query;
   const [productDocs, documentDocs, allDocuments, moveDocs] = await Promise.all([
     Product.find().lean(),
     InventoryDocument.find().sort({ date: -1 }).limit(20).lean(),
-    InventoryDocument.find().select("type status").lean(),
+    InventoryDocument.find().select("reference type status warehouse sourceLocation destinationLocation category lines").lean(),
     StockMovement.find({ date: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } }).lean()
   ]);
-  const products = productDocs.map(productResponse);
-  const documents = documentDocs.map(documentResponse);
+  const products = productDocs.map(productResponse)
+    .filter((product) => (!category || category === "all" || product.category === category)
+      && (!search || `${product.name} ${product.sku} ${product.category}`.toLowerCase().includes(String(search).trim().toLowerCase())))
+    .map((product) => warehouse && warehouse !== "all"
+      ? { ...product, stock: product.stockByLocation.find((row) => row.location === warehouse)?.quantity || 0 }
+      : product);
+  const documents = documentDocs.map(documentResponse).filter((document) => matchesInventoryFilters(document, req.query));
+  const matchingDocuments = allDocuments.filter((document) => matchesInventoryFilters(document, req.query));
+  const moveReferences = await InventoryDocument.find({ reference: { $in: moveDocs.map((move) => move.reference) } }).select("reference type status").lean();
+  const moveByReference = new Map(moveReferences.map((document) => [document.reference, document]));
+  const filteredMoves = moveDocs.filter((move) => {
+    const document = moveByReference.get(move.reference);
+    const productCategory = productDocs.find((product) => String(product._id) === String(move.product))?.category || "";
+    return matchesInventoryFilters({
+      reference: move.reference,
+      type: document?.type || move.type,
+      status: document?.status || "Done",
+      category: productCategory,
+      product: move.productName,
+      sku: move.sku,
+      from: move.from,
+      to: move.to
+    }, req.query);
+  });
   const attentionProducts = products.filter((product) => product.stock <= product.reorderPoint)
     .sort((a, b) => (a.reorderPoint ? a.stock / a.reorderPoint : 0) - (b.reorderPoint ? b.stock / b.reorderPoint : 0));
   const kpis = [
     { label: "Total Products in Stock", value: products.reduce((total, product) => total + product.stock, 0).toLocaleString(), tone: "default" },
     { label: "Low Stock Items", value: products.filter((product) => product.stock > 0 && product.stock <= product.reorderPoint).length, tone: "warning" },
     { label: "Out of Stock", value: products.filter((product) => product.stock === 0).length, tone: "danger" },
-    { label: "Pending Receipts", value: allDocuments.filter((document) => document.type === "Receipt" && ["Draft", "Waiting", "Ready"].includes(document.status)).length, tone: "default" },
-    { label: "Pending Deliveries", value: allDocuments.filter((document) => document.type === "Delivery" && ["Draft", "Waiting", "Ready"].includes(document.status)).length, tone: "default" },
-    { label: "Transfers Scheduled", value: allDocuments.filter((document) => document.type === "Internal" && ["Draft", "Waiting", "Ready"].includes(document.status)).length, tone: "default" }
+    { label: "Pending Receipts", value: matchingDocuments.filter((document) => document.type === "Receipt" && ["Draft", "Waiting", "Ready"].includes(document.status)).length, tone: "default" },
+    { label: "Pending Deliveries", value: matchingDocuments.filter((document) => document.type === "Delivery" && ["Draft", "Waiting", "Ready"].includes(document.status)).length, tone: "default" },
+    { label: "Transfers Scheduled", value: matchingDocuments.filter((document) => document.type === "Internal" && ["Draft", "Waiting", "Ready"].includes(document.status)).length, tone: "default" }
   ];
   const activity = Array.from({ length: 7 }, (_, index) => {
     const day = new Date();
     day.setHours(0, 0, 0, 0);
     day.setDate(day.getDate() - (6 - index));
-    const dayMoves = moveDocs.filter((move) => new Date(move.date).toDateString() === day.toDateString());
+    const dayMoves = filteredMoves.filter((move) => new Date(move.date).toDateString() === day.toDateString());
     return {
       day: new Intl.DateTimeFormat("en", { weekday: "short" }).format(day),
       incoming: dayMoves.filter((move) => move.quantity > 0).reduce((sum, move) => sum + move.quantity, 0),
@@ -330,11 +542,19 @@ const getDashboard = endpoint(async () => {
 module.exports = {
   getFilters,
   getCategories,
+  createCategory,
+  updateCategory,
+  deleteCategory,
   getProducts,
   createProduct,
   updateProduct,
+  getReorderRules,
+  saveReorderRule,
+  deleteReorderRule,
   getWarehouses,
   createWarehouse,
+  updateWarehouse,
+  deleteWarehouse,
   getDocuments,
   createDocument,
   updateDocumentStatus,

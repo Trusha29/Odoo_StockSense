@@ -4,6 +4,7 @@ const {
   Category,
   Warehouse,
   Product,
+  ReorderRule,
   InventoryDocument,
   StockMovement
 } = require("../models/Inventory");
@@ -12,11 +13,11 @@ dotenv.config();
 
 const categories = ["Raw Materials", "Fasteners", "Finished Goods", "Packaging"];
 const warehouses = [
-  { name: "Main Warehouse", code: "MAIN" },
-  { name: "Production Floor", code: "PROD" },
-  { name: "Warehouse 2", code: "WH2" },
-  { name: "Rack A", code: "RACKA" },
-  { name: "Rack B", code: "RACKB" }
+  { name: "Main Warehouse", code: "MAIN", kind: "warehouse", parentWarehouse: "" },
+  { name: "Production Floor", code: "PROD", kind: "warehouse", parentWarehouse: "" },
+  { name: "Warehouse 2", code: "WH2", kind: "warehouse", parentWarehouse: "" },
+  { name: "Rack A", code: "RACKA", kind: "location", parentWarehouse: "Main Warehouse" },
+  { name: "Rack B", code: "RACKB", kind: "location", parentWarehouse: "Main Warehouse" }
 ];
 const products = [
   { sku: "STL-ROD-08", name: "Steel Rods 8mm", category: "Raw Materials", uom: "kg", reorderPoint: 100, stockByLocation: [{ location: "Main Warehouse", quantity: 350 }, { location: "Production Floor", quantity: 20 }, { location: "Warehouse 2", quantity: 50 }] },
@@ -24,6 +25,13 @@ const products = [
   { sku: "BLT-M6-20", name: "M6 Bolt 20mm", category: "Fasteners", uom: "pcs", reorderPoint: 500, stockByLocation: [{ location: "Rack A", quantity: 0 }] },
   { sku: "BOX-CRD-L", name: "Cardboard Box - Large", category: "Packaging", uom: "pcs", reorderPoint: 150, stockByLocation: [{ location: "Main Warehouse", quantity: 210 }] },
   { sku: "STL-SHT-02", name: "Steel Sheet 2mm", category: "Raw Materials", uom: "kg", reorderPoint: 100, stockByLocation: [{ location: "Main Warehouse", quantity: 88 }] }
+];
+const reorderRules = [
+  { sku: "STL-ROD-08", location: "Main Warehouse", reorderAt: 100, targetStock: 200 },
+  { sku: "CHR-OAK-14", location: "Main Warehouse", reorderAt: 40, targetStock: 80 },
+  { sku: "BLT-M6-20", location: "Rack A", reorderAt: 500, targetStock: 1000 },
+  { sku: "BOX-CRD-L", location: "Main Warehouse", reorderAt: 150, targetStock: 300 },
+  { sku: "STL-SHT-02", location: "Main Warehouse", reorderAt: 100, targetStock: 200 }
 ];
 
 const documents = [
@@ -52,7 +60,8 @@ async function seedInventory() {
     await Category.updateOne({ name }, { $setOnInsert: { name } }, { upsert: true });
   }
   for (const warehouse of warehouses) {
-    await Warehouse.updateOne({ code: warehouse.code }, { $setOnInsert: warehouse }, { upsert: true });
+    const { code, ...details } = warehouse;
+    await Warehouse.updateOne({ code }, { $set: details, $setOnInsert: { code } }, { upsert: true });
   }
 
   const productsBySku = new Map();
@@ -63,6 +72,15 @@ async function seedInventory() {
       { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
     );
     productsBySku.set(product.sku, savedProduct);
+  }
+
+  for (const rule of reorderRules) {
+    const product = productsBySku.get(rule.sku);
+    await ReorderRule.updateOne(
+      { product: product._id, location: rule.location },
+      { $setOnInsert: { product: product._id, location: rule.location, reorderAt: rule.reorderAt, targetStock: rule.targetStock } },
+      { upsert: true }
+    );
   }
 
   for (const document of documents) {
