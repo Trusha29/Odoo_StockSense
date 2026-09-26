@@ -1,8 +1,9 @@
 import { useSelector } from 'react-redux'
 import { Bell, Menu } from 'lucide-react'
+import { formatRole } from '../utils/permissions.js'
 
 export default function Topbar({ title, onMenuToggle }) {
-  const user = useSelector((s) => s.auth.user) || { name: 'Priya Sharma', role: 'Inventory Manager' }
+  const user = useSelector((s) => s.auth.user) || { name: 'User', role: '' }
 
   return (
     <header className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-surface px-4 py-3 md:px-6 md:py-4">
@@ -21,7 +22,7 @@ export default function Topbar({ title, onMenuToggle }) {
           </div>
           <div className="hidden text-sm leading-tight sm:block">
             <p className="text-ink font-medium">{user.name}</p>
-            <p className="text-inkSoft text-xs">{user.role}</p>
+            <p className="text-inkSoft text-xs">{formatRole(user.role)}</p>
           </div>
         </div>
       </div>

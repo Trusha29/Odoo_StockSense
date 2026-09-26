@@ -9,7 +9,7 @@ import useInventoryData from '../hooks/useInventoryData.js'
 import { getPermissions } from '../utils/permissions.js'
 import { filterDocuments } from '../utils/filterDocuments.js'
 
-const EMPTY_FORM = { productId: '', quantity: '1', countedQuantity: '0', warehouse: '', sourceLocation: '', destinationLocation: '', partner: '', reason: '' }
+const EMPTY_FORM = { lines: [{ productId: '', quantity: '1' }], warehouse: '', sourceLocation: '', destinationLocation: '', partner: '', reason: '' }
 
 export default function OperationManager({ type, title, createLabel, partnerLabel }) {
   const [showForm, setShowForm] = useState(false)
@@ -33,7 +33,7 @@ export default function OperationManager({ type, title, createLabel, partnerLabe
   useEffect(() => {
     setForm((current) => ({
       ...current,
-      productId: current.productId || products[0]?.id || '',
+      lines: current.lines.map((line) => ({ ...line, productId: line.productId || products[0]?.id || '' })),
       warehouse: current.warehouse || warehouses[0] || '',
       sourceLocation: current.sourceLocation || warehouses[0] || '',
       destinationLocation: current.destinationLocation || warehouses[1] || ''
@@ -44,7 +44,7 @@ export default function OperationManager({ type, title, createLabel, partnerLabe
     setErrorMessage('')
     setForm({
       ...EMPTY_FORM,
-      productId: products[0]?.id || '',
+      lines: [{ productId: products[0]?.id || '', quantity: type === 'Adjustment' ? '0' : '1' }],
       warehouse: warehouses[0] || '',
       sourceLocation: warehouses[0] || '',
       destinationLocation: warehouses[1] || ''
@@ -53,13 +53,17 @@ export default function OperationManager({ type, title, createLabel, partnerLabe
   }
 
   const changeField = (field) => (event) => setForm((current) => ({ ...current, [field]: event.target.value }))
+  const changeLine = (index, field, value) => setForm((current) => ({
+    ...current,
+    lines: current.lines.map((line, lineIndex) => lineIndex === index ? { ...line, [field]: value } : line)
+  }))
 
   const saveDocument = async (event) => {
     event.preventDefault()
     setBusy(true)
     setErrorMessage('')
     try {
-      const payload = { ...form, type, quantity: Number(form.quantity), countedQuantity: Number(form.countedQuantity) }
+      const payload = { ...form, type, lines: form.lines.map((line) => ({ ...line, quantity: Number(line.quantity) })) }
       await api.post('/inventory/documents', payload)
       setShowForm(false)
       reload()
@@ -116,10 +120,24 @@ export default function OperationManager({ type, title, createLabel, partnerLabe
             <h3 className="font-head text-lg font-semibold mb-4">New {title.toLowerCase()}</h3>
             {errorMessage && <p className="text-sm text-danger bg-red-50 border border-red-200 rounded-sm px-3 py-2 mb-3">{errorMessage}</p>}
             <div className="space-y-3">
-              <select required value={form.productId} onChange={changeField('productId')} className="w-full border border-line rounded-sm px-3 py-2 text-sm">
-                <option value="">Choose product</option>
-                {products.map((product) => <option key={product.id} value={product.id}>{product.name} ({product.sku})</option>)}
-              </select>
+              {form.lines.map((line, index) => (
+                <div key={`line-${index}`} className="space-y-2 border border-line rounded-sm p-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium text-inkSoft">Product {index + 1}</label>
+                    {form.lines.length > 1 && <button type="button" onClick={() => setForm((current) => ({ ...current, lines: current.lines.filter((_, lineIndex) => lineIndex !== index) }))} className="text-xs text-danger hover:underline">Remove</button>}
+                  </div>
+                  <select required value={line.productId} onChange={(event) => changeLine(index, 'productId', event.target.value)} className="w-full border border-line rounded-sm px-3 py-2 text-sm">
+                    <option value="">Choose product</option>
+                    {products.map((product) => <option key={product.id} value={product.id}>{product.name} ({product.sku})</option>)}
+                  </select>
+                  {type === 'Adjustment' ? (
+                    <input required type="number" min="0" step="any" value={line.quantity} onChange={(event) => changeLine(index, 'quantity', event.target.value)} className="w-full border border-line rounded-sm px-3 py-2 text-sm" placeholder="Counted quantity" />
+                  ) : (
+                    <input required type="number" min="0.01" step="any" value={line.quantity} onChange={(event) => changeLine(index, 'quantity', event.target.value)} className="w-full border border-line rounded-sm px-3 py-2 text-sm" placeholder="Quantity" />
+                  )}
+                </div>
+              ))}
+              <button type="button" onClick={() => setForm((current) => ({ ...current, lines: [...current.lines, { productId: '', quantity: type === 'Adjustment' ? '0' : '1' }] }))} className="text-sm text-accent font-medium hover:underline">Add product line</button>
               {type === 'Internal' ? (
                 <div className="flex items-center gap-2">
                   <select required value={form.sourceLocation} onChange={changeField('sourceLocation')} className="min-w-0 flex-1 border border-line rounded-sm px-3 py-2 text-sm">
@@ -135,14 +153,7 @@ export default function OperationManager({ type, title, createLabel, partnerLabe
                   {warehouses.map((warehouse) => <option key={warehouse} value={warehouse}>{warehouse}</option>)}
                 </select>
               )}
-              {type === 'Adjustment' ? (
-                <>
-                  <input required type="number" min="0" step="any" value={form.countedQuantity} onChange={changeField('countedQuantity')} className="w-full border border-line rounded-sm px-3 py-2 text-sm" placeholder="Counted quantity" />
-                  <input value={form.reason} onChange={changeField('reason')} className="w-full border border-line rounded-sm px-3 py-2 text-sm" placeholder="Reason" />
-                </>
-              ) : (
-                <input required type="number" min="0.01" step="any" value={form.quantity} onChange={changeField('quantity')} className="w-full border border-line rounded-sm px-3 py-2 text-sm" placeholder="Quantity" />
-              )}
+              {type === 'Adjustment' && <input value={form.reason} onChange={changeField('reason')} className="w-full border border-line rounded-sm px-3 py-2 text-sm" placeholder="Reason" />}
               {partnerLabel !== 'Route' && type !== 'Adjustment' && (
                 <input required value={form.partner} onChange={changeField('partner')} className="w-full border border-line rounded-sm px-3 py-2 text-sm" placeholder={partnerLabel} />
               )}
@@ -167,8 +178,7 @@ export default function OperationManager({ type, title, createLabel, partnerLabe
             {errorMessage && <p className="text-sm text-danger bg-red-50 border border-red-200 rounded-sm px-3 py-2 mb-3">{errorMessage}</p>}
             <div className="space-y-2 text-sm text-inkSoft mb-5">
               <p>{partnerLabel}: {selected.partner || 'Stock count'} · {selected.warehouse}</p>
-              <p>Product: {selected.product} ({selected.sku})</p>
-              <p>{type === 'Adjustment' ? `Counted quantity: ${selected.countedQuantity}` : `Quantity: ${selected.quantity}`}</p>
+              <div><p className="font-medium text-ink">Products</p>{(selected.lines || [{ product: selected.product, sku: selected.sku, quantity: selected.quantity }]).map((line) => <p key={`${line.productId || line.sku}-${line.sku}`}>{line.product} ({line.sku}) · {line.quantity}</p>)}</div>
               {selected.reason && <p>Reason: {selected.reason}</p>}
             </div>
             <div className="flex justify-end gap-2">

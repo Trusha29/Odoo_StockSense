@@ -1,6 +1,7 @@
+import { useEffect, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { setFilter } from '../store/filtersSlice.js'
-import { warehouses, categories } from '../data/mockData.js'
+import api from '../api/axiosClient.js'
 
 const Select = ({ label, filterKey, options }) => {
   const dispatch = useDispatch()
@@ -23,6 +24,13 @@ const Select = ({ label, filterKey, options }) => {
 export default function FilterBar({ showDocType = true, showStatus = true, showWarehouse = true, showCategory = true }) {
   const dispatch = useDispatch()
   const search = useSelector((s) => s.filters.search)
+  const [options, setOptions] = useState({ warehouses: [], categories: [] })
+
+  useEffect(() => {
+    api.get('/inventory/filters')
+      .then((response) => setOptions(response.data))
+      .catch(() => setOptions({ warehouses: [], categories: [] }))
+  }, [])
 
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -37,8 +45,8 @@ export default function FilterBar({ showDocType = true, showStatus = true, showW
         <Select label="Document type" filterKey="docType" options={['Receipt', 'Delivery', 'Internal', 'Adjustment']} />
       )}
       {showStatus && <Select label="Status" filterKey="status" options={['Draft', 'Waiting', 'Ready', 'Done', 'Canceled']} />}
-      {showWarehouse && <Select label="Warehouse" filterKey="warehouse" options={warehouses} />}
-      {showCategory && <Select label="Category" filterKey="category" options={categories} />}
+      {showWarehouse && <Select label="Warehouse" filterKey="warehouse" options={options.warehouses} />}
+      {showCategory && <Select label="Category" filterKey="category" options={options.categories} />}
     </div>
   )
 }

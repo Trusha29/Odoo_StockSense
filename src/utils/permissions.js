@@ -7,8 +7,14 @@ export const ROLES = {
   STAFF: 'Warehouse Staff',
 }
 
+export function formatRole(role) {
+  if (role === 'inventory_manager') return ROLES.MANAGER
+  if (role === 'warehouse_staff') return ROLES.STAFF
+  return role || ''
+}
+
 export function getPermissions(role) {
-  const isManager = role === ROLES.MANAGER
+  const isManager = role === ROLES.MANAGER || role === 'inventory_manager'
   return {
     // Products: managers own the catalog
     canCreateProducts: isManager,

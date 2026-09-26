@@ -14,7 +14,7 @@ import {
   Boxes,
   LogOut,
 } from 'lucide-react'
-import { getPermissions } from '../utils/permissions.js'
+import { formatRole, getPermissions } from '../utils/permissions.js'
 import { logout } from '../store/authSlice.js'
 
 const NAV = [
@@ -29,7 +29,7 @@ const NAV = [
 
 export default function Sidebar({ mobileOpen, onNavigate }) {
   const role = useSelector((s) => s.auth.user?.role)
-  const user = useSelector((s) => s.auth.user) || { name: 'Priya Sharma', role: 'Inventory Manager' }
+  const user = useSelector((s) => s.auth.user) || { name: 'User', role: '' }
   const dispatch = useDispatch()
   const navigate = useNavigate()
   const { canManageWarehouses } = getPermissions(role)
@@ -70,7 +70,7 @@ export default function Sidebar({ mobileOpen, onNavigate }) {
       <div className="border-t border-white/10 px-3 py-3 space-y-1">
         <div className="mb-3 flex items-center gap-3 px-2 py-2">
           <div className="grid h-8 w-8 place-items-center rounded-full bg-white/10 text-xs font-semibold text-white">{user.name.split(' ').map((n) => n[0]).join('')}</div>
-          <div className="min-w-0"><p className="truncate text-xs font-medium text-white">{user.name}</p><p className="truncate text-[11px] text-sidebarInk/65">{user.role}</p></div>
+          <div className="min-w-0"><p className="truncate text-xs font-medium text-white">{user.name}</p><p className="truncate text-[11px] text-sidebarInk/65">{formatRole(user.role)}</p></div>
         </div>
         {canManageWarehouses && (
           <NavLink

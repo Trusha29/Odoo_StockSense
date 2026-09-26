@@ -1,8 +1,20 @@
+import { useSelector } from 'react-redux'
 import DataTable from '../components/DataTable.jsx'
 import FilterBar from '../components/FilterBar.jsx'
-import { moveHistory } from '../data/mockData.js'
+import useInventoryData from '../hooks/useInventoryData.js'
 
 export default function MoveHistory() {
+  const filters = useSelector((state) => state.filters)
+  const { data, loading, error } = useInventoryData('/inventory/moves', { moves: [] })
+  const search = filters.search.trim().toLowerCase()
+  const rows = (data.moves || []).filter((move) => {
+    if (filters.docType !== 'all' && move.type !== filters.docType) return false
+    if (filters.status !== 'all' && move.status !== filters.status) return false
+    if (filters.warehouse !== 'all' && ![move.from, move.to].includes(filters.warehouse)) return false
+    if (filters.category !== 'all' && move.category !== filters.category) return false
+    return !search || `${move.id} ${move.product} ${move.sku} ${move.ref} ${move.from} ${move.to}`.toLowerCase().includes(search)
+  })
+
   const columns = [
     { key: 'id', header: 'Move' },
     { key: 'product', header: 'Product' },
@@ -24,8 +36,10 @@ export default function MoveHistory() {
       <p className="text-sm text-inkSoft">
         A read-only ledger of every stock movement. This is the audit trail every receipt, delivery, transfer and adjustment writes to.
       </p>
-      <FilterBar showDocType={false} />
-      <DataTable columns={columns} rows={moveHistory} />
+      <FilterBar />
+      {error && <p className="text-sm text-danger">{error}</p>}
+      {loading && <p className="text-sm text-inkSoft">Loading stock movements...</p>}
+      <DataTable columns={columns} rows={rows} />
     </div>
   )
 }
