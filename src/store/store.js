@@ -8,3 +8,13 @@ export const store = configureStore({
     filters: filtersReducer,
   },
 })
+
+store.subscribe(() => {
+  const { user, token } = store.getState().auth
+  try {
+    if (user && token) window.sessionStorage.setItem('stocksense-auth', JSON.stringify({ user, token }))
+    else window.sessionStorage.removeItem('stocksense-auth')
+  } catch {
+    // Storage can be unavailable in restricted browsing contexts.
+  }
+})

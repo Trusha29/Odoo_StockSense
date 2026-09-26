@@ -1,10 +1,16 @@
 import { createSlice } from '@reduxjs/toolkit'
 
-const initialState = {
-  user: null,       // { id, name, email, role }
-  token: null,
-  isAuthenticated: false,
-}
+const initialState = (() => {
+  try {
+    const savedAuth = JSON.parse(window.sessionStorage.getItem('stocksense-auth') || 'null')
+    if (savedAuth?.user && savedAuth?.token) {
+      return { user: savedAuth.user, token: savedAuth.token, isAuthenticated: true }
+    }
+  } catch {
+    window.sessionStorage.removeItem('stocksense-auth')
+  }
+  return { user: null, token: null, isAuthenticated: false }
+})()
 
 const authSlice = createSlice({
   name: 'auth',
