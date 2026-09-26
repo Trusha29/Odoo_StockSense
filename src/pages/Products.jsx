@@ -42,7 +42,7 @@ export default function Products() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <FilterBar showDocType={false} />
+        <FilterBar showDocType={false} showStatus={false} showWarehouse={false} />
         {canCreateProducts && (
           <button
             onClick={() => setShowForm(true)}

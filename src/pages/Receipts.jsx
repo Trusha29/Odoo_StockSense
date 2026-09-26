@@ -6,12 +6,14 @@ import FilterBar from '../components/FilterBar.jsx'
 import StatusPill from '../components/StatusPill.jsx'
 import { documents } from '../data/mockData.js'
 import { getPermissions } from '../utils/permissions.js'
+import { filterDocuments } from '../utils/filterDocuments.js'
 
 export default function Receipts() {
   const [selected, setSelected] = useState(null)
   const role = useSelector((s) => s.auth.user?.role)
+  const filters = useSelector((s) => s.filters)
   const { canCreateReceipts } = getPermissions(role)
-  const rows = documents.filter((d) => d.type === 'Receipt')
+  const rows = filterDocuments(documents, filters, 'Receipt')
 
   const columns = [
     { key: 'id', header: 'Receipt' },

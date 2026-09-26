@@ -27,12 +27,12 @@ export const products = [
 ]
 
 export const documents = [
-  { id: 'RCP-0231', type: 'Receipt', partner: 'Bansal Steel Co.', warehouse: 'Main Warehouse', status: 'Waiting', date: '2026-09-24' },
-  { id: 'DLV-0417', type: 'Delivery', partner: 'Urban Furniture Ltd.', warehouse: 'Main Warehouse', status: 'Ready', date: '2026-09-25' },
-  { id: 'INT-0093', type: 'Internal', partner: 'Main \u2192 Production Floor', warehouse: 'Main Warehouse', status: 'Done', date: '2026-09-25' },
-  { id: 'ADJ-0022', type: 'Adjustment', partner: 'Cycle Count #14', warehouse: 'Rack A', status: 'Draft', date: '2026-09-26' },
-  { id: 'RCP-0230', type: 'Receipt', partner: 'Bansal Steel Co.', warehouse: 'Warehouse 2', status: 'Done', date: '2026-09-22' },
-  { id: 'DLV-0416', type: 'Delivery', partner: 'Craft Interiors', warehouse: 'Main Warehouse', status: 'Cancelled', date: '2026-09-21' },
+  { id: 'RCP-0231', type: 'Receipt', partner: 'Bansal Steel Co.', warehouse: 'Main Warehouse', status: 'Waiting', date: '2026-09-24', product: 'Steel Rods 8mm', sku: 'STL-ROD-08', category: 'Raw Materials' },
+  { id: 'DLV-0417', type: 'Delivery', partner: 'Urban Furniture Ltd.', warehouse: 'Main Warehouse', status: 'Ready', date: '2026-09-25', product: 'Oak Chair Frame', sku: 'CHR-OAK-14', category: 'Finished Goods' },
+  { id: 'INT-0093', type: 'Internal', partner: 'Main \u2192 Production Floor', warehouse: 'Main Warehouse', status: 'Done', date: '2026-09-25', product: 'Steel Rods 8mm', sku: 'STL-ROD-08', category: 'Raw Materials' },
+  { id: 'ADJ-0022', type: 'Adjustment', partner: 'Cycle Count #14', warehouse: 'Rack A', status: 'Draft', date: '2026-09-26', product: 'M6 Bolt 20mm', sku: 'BLT-M6-20', category: 'Fasteners' },
+  { id: 'RCP-0230', type: 'Receipt', partner: 'Bansal Steel Co.', warehouse: 'Warehouse 2', status: 'Done', date: '2026-09-22', product: 'Steel Rods 8mm', sku: 'STL-ROD-08', category: 'Raw Materials' },
+  { id: 'DLV-0416', type: 'Delivery', partner: 'Craft Interiors', warehouse: 'Main Warehouse', status: 'Canceled', date: '2026-09-21', product: 'Oak Chair Frame', sku: 'CHR-OAK-14', category: 'Finished Goods' },
 ]
 
 export const moveHistory = [

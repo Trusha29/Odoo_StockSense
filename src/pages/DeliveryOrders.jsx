@@ -6,6 +6,7 @@ import FilterBar from '../components/FilterBar.jsx'
 import StatusPill from '../components/StatusPill.jsx'
 import { documents } from '../data/mockData.js'
 import { getPermissions } from '../utils/permissions.js'
+import { filterDocuments } from '../utils/filterDocuments.js'
 
 const STEPS = ['Pick', 'Pack', 'Validate']
 
@@ -13,8 +14,9 @@ export default function DeliveryOrders() {
   const [selected, setSelected] = useState(null)
   const [step, setStep] = useState(0)
   const role = useSelector((s) => s.auth.user?.role)
+  const filters = useSelector((s) => s.filters)
   const { canCreateDeliveries } = getPermissions(role)
-  const rows = documents.filter((d) => d.type === 'Delivery')
+  const rows = filterDocuments(documents, filters, 'Delivery')
 
   const open = (r) => { setSelected(r); setStep(0) }
 

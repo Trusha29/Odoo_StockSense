@@ -1,49 +1,53 @@
-# StockSense — Frontend
+# StockSense Frontend
 
-React + Vite + Tailwind + Redux Toolkit frontend for the StockSense Inventory Management System.
+A React, Vite, Tailwind CSS, and Redux Toolkit prototype for an inventory management system. The interface covers inventory overview, products, receipts, deliveries, internal transfers, stock adjustments, move history, warehouse settings, and user profile.
 
-## Setup
+## Requirements
+
+- Node.js 18 or newer
+- npm
+
+## Run locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-Opens at `http://localhost:5173`. It expects a backend at `http://localhost:5000` (see `vite.config.js` proxy) — until that exists, every page runs on mock data in `src/data/mockData.js`, so the UI is fully clickable on its own.
+Vite serves the app at `http://localhost:5173` by default. Sign in with either demo account:
 
-## What's here
+| Role | Email | Password |
+| --- | --- | --- |
+| Inventory Manager | `manager@stocksense.io` | `manager123` |
+| Warehouse Staff | `staff@stocksense.io` | `staff123` |
 
-- `src/pages/` — one file per module: Login, Dashboard, Products, Receipts, DeliveryOrders, InternalTransfers, Adjustments, MoveHistory, Settings, Profile
-- `src/components/` — reusable pieces: `DataTable`, `FilterBar`, `KpiCard`, `StatusPill`, `Sidebar`, `Topbar`
-- `src/store/` — Redux Toolkit: `authSlice` (login state), `filtersSlice` (the dashboard's dynamic filters)
-- `src/api/axiosClient.js` — pre-wired axios instance that attaches the JWT and logs out on 401
-- `src/data/mockData.js` — swap this out for real API calls once the backend is ready
+## Available scripts
 
-## Wiring up the real backend
-
-Each page has a `// TODO` or an inline mock array where a real API call goes. The pattern is the same everywhere:
-
-```js
-// instead of importing from mockData.js
-import api from '../api/axiosClient.js'
-import { useEffect, useState } from 'react'
-
-const [products, setProducts] = useState([])
-useEffect(() => {
-  api.get('/products').then((res) => setProducts(res.data))
-}, [])
+```bash
+npm run dev      # Start the development server
+npm run build    # Create the production bundle in dist/
+npm run preview  # Preview the production bundle locally
 ```
 
-Suggested order to connect real endpoints (matches the backend build order):
-1. `POST /api/auth/login`, `POST /api/auth/forgot-password`, `POST /api/auth/reset-password` → `Login.jsx`
-2. `GET/POST /api/products` → `Products.jsx`
-3. `GET/POST /api/receipts`, `POST /api/receipts/:id/validate` → `Receipts.jsx`
-4. `GET/POST /api/deliveries`, `POST /api/deliveries/:id/validate` → `DeliveryOrders.jsx`
-5. `GET/POST /api/transfers` → `InternalTransfers.jsx`
-6. `GET/POST /api/adjustments` → `Adjustments.jsx`
-7. `GET /api/stock-moves` → `MoveHistory.jsx`
-8. `GET /api/dashboard/kpis` → `Dashboard.jsx`
+## UI scope
 
-## Design tokens
+- Responsive navigation and inventory dashboard with KPIs, stock alerts, recent operations, and work queue.
+- Product catalog and operation lists for receipts, delivery orders, internal transfers, and adjustments.
+- Search and filters for document type, status, warehouse, and product category.
+- Role-aware navigation and controls for Inventory Managers and Warehouse Staff.
+- Mock inventory, products, users, and documents are defined in `src/data/mockData.js`.
 
-Defined in `tailwind.config.js`: sidebar `#12161D`, accent `#E8A23D` (reserved for primary actions + low-stock warnings), danger `#D64545`, success `#2F9E64`. Headings use Archivo, body/data uses Inter, SKUs/codes use JetBrains Mono.
+This is a frontend prototype. Login credentials are checked against demo data, password reset is a UI flow only, and document/product form actions do not save changes to a server. Lists and dashboard values are sample data, not live inventory.
+
+## Backend integration
+
+Vite proxies `/api` requests to `http://localhost:5000`. The Axios client in `src/api/axiosClient.js` uses that base path, attaches the demo session token when present, and clears authentication on a `401` response. The current pages still use mock data; connecting API endpoints and persisting workflow actions remains future work.
+
+## Project structure
+
+- `src/pages/` — route-level screens.
+- `src/components/` — shared navigation, tables, filters, status labels, and KPI components.
+- `src/layouts/` — authenticated application shell.
+- `src/store/` — authentication and filter state.
+- `src/utils/` — role permissions and document filtering.
+- `src/api/` — Axios client for future backend requests.

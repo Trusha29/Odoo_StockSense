@@ -4,10 +4,13 @@ import DataTable from '../components/DataTable.jsx'
 import FilterBar from '../components/FilterBar.jsx'
 import StatusPill from '../components/StatusPill.jsx'
 import { documents, warehouses } from '../data/mockData.js'
+import { useSelector } from 'react-redux'
+import { filterDocuments } from '../utils/filterDocuments.js'
 
 export default function InternalTransfers() {
   const [showForm, setShowForm] = useState(false)
-  const rows = documents.filter((d) => d.type === 'Internal')
+  const filters = useSelector((s) => s.filters)
+  const rows = filterDocuments(documents, filters, 'Internal')
 
   const columns = [
     { key: 'id', header: 'Transfer' },

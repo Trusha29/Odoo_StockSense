@@ -4,6 +4,7 @@ const STYLES = {
   ready: 'bg-blue-50 text-blue-700 border border-blue-200',
   done: 'bg-green-50 text-success border border-green-200',
   cancelled: 'bg-red-50 text-danger border border-red-200',
+  canceled: 'bg-red-50 text-danger border border-red-200',
 }
 
 export default function StatusPill({ status, label }) {

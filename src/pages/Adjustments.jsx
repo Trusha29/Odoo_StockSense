@@ -4,13 +4,16 @@ import DataTable from '../components/DataTable.jsx'
 import FilterBar from '../components/FilterBar.jsx'
 import StatusPill from '../components/StatusPill.jsx'
 import { documents } from '../data/mockData.js'
+import { useSelector } from 'react-redux'
+import { filterDocuments } from '../utils/filterDocuments.js'
 
 export default function Adjustments() {
   const [showForm, setShowForm] = useState(false)
   const [counted, setCounted] = useState('')
+  const filters = useSelector((s) => s.filters)
   const systemQty = 91
 
-  const rows = documents.filter((d) => d.type === 'Adjustment')
+  const rows = filterDocuments(documents, filters, 'Adjustment')
   const diff = counted !== '' ? Number(counted) - systemQty : null
 
   const columns = [

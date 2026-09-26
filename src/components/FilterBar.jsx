@@ -20,25 +20,25 @@ const Select = ({ label, filterKey, options }) => {
   )
 }
 
-export default function FilterBar({ showDocType = true }) {
+export default function FilterBar({ showDocType = true, showStatus = true, showWarehouse = true, showCategory = true }) {
   const dispatch = useDispatch()
   const search = useSelector((s) => s.filters.search)
 
   return (
-    <div className="flex flex-wrap items-center gap-2 mb-4">
+    <div className="mb-4 flex flex-wrap items-center gap-2">
       <input
         type="text"
         placeholder="Search by SKU or name"
         value={search}
         onChange={(e) => dispatch(setFilter({ key: 'search', value: e.target.value }))}
-        className="border border-line rounded-sm px-3 py-1.5 text-sm bg-surface text-ink w-56 focus:border-accent"
+        className="min-w-[190px] flex-1 border border-line rounded-sm px-3 py-2 text-sm bg-surface text-ink focus:border-accent sm:flex-none sm:w-56"
       />
       {showDocType && (
         <Select label="Document type" filterKey="docType" options={['Receipt', 'Delivery', 'Internal', 'Adjustment']} />
       )}
-      <Select label="Status" filterKey="status" options={['Draft', 'Waiting', 'Ready', 'Done', 'Cancelled']} />
-      <Select label="Warehouse" filterKey="warehouse" options={warehouses} />
-      <Select label="Category" filterKey="category" options={categories} />
+      {showStatus && <Select label="Status" filterKey="status" options={['Draft', 'Waiting', 'Ready', 'Done', 'Canceled']} />}
+      {showWarehouse && <Select label="Warehouse" filterKey="warehouse" options={warehouses} />}
+      {showCategory && <Select label="Category" filterKey="category" options={categories} />}
     </div>
   )
 }
